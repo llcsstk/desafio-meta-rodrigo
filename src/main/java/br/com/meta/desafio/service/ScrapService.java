@@ -1,6 +1,8 @@
 package br.com.meta.desafio.service;
 
+import br.com.meta.desafio.mapper.FileMapper;
 import br.com.meta.desafio.model.FileAttribute;
+import br.com.meta.desafio.model.Repository;
 import br.com.meta.desafio.util.FileUtil;
 import br.com.meta.desafio.viewModel.FileInfo;
 import br.com.meta.desafio.viewModel.RepositoryInfo;
@@ -20,13 +22,31 @@ import java.util.stream.Collectors;
 
 @Service
 public class ScrapService {
+    private final RepositoryService service;
+
+    public ScrapService(RepositoryService service) {
+        this.service = service;
+    }
+
     public RepositoryInfo scrap(String url) throws Exception {
+        final Repository cachedRepository = service.getCachedRepository(url);
         final RepositoryInfo repositoryInfo = new RepositoryInfo();
         final RepositoryResume repositoryResume = new RepositoryResume();
 
+        final List<FileInfo> fileInfos = new ArrayList<>();
+        List<FileAttribute> fileAttributes = new ArrayList<>();
 
-        List<FileInfo> fileInfos = new ArrayList<>();
-        List<FileAttribute> fileAttributes = scrapPage(url);
+        String repoLastCommit = scrapPageGetLastCommit(url);
+
+        if (cachedRepository != null && cachedRepository.getLastCommit().equals(repoLastCommit)) {
+            fileAttributes.addAll(cachedRepository.getListFiles().stream()
+                    .map(FileMapper::toAttribute)
+                    .collect(Collectors.toList()));
+        } else {
+            fileAttributes.addAll(scrapPage(url));
+        }
+
+        service.cacheRepository(url, repoLastCommit, fileAttributes);
 
         fileAttributes.stream().collect(Collectors.groupingBy(FileAttribute::getExtension)).forEach((s, fileAttributes1) -> {
             int lines = fileAttributes1.stream().mapToInt(FileAttribute::getLines).sum();
@@ -46,6 +66,15 @@ public class ScrapService {
         repositoryInfo.setFileInfos(fileInfos);
 
         return repositoryInfo;
+
+    }
+
+    private String scrapPageGetLastCommit(String url) throws Exception {
+        Document webPage = Jsoup.connect(url).get();
+
+        Elements commitElement = webPage.getElementsByClass("d-none js-permalink-shortcut");
+
+        return commitElement.get(0).attr("href");
     }
 
     private List<FileAttribute> scrapPage(String url) throws Exception {
@@ -97,7 +126,7 @@ public class ScrapService {
             if (indexOfExtension == -1) {
                 fileAttribute.setExtension(fileName);
             } else {
-                fileAttribute.setExtension(fileName.substring(fileName.lastIndexOf("."), fileName.length()));
+                fileAttribute.setExtension(fileName.substring(fileName.lastIndexOf(".")));
             }
 
             fileAttribute.setLines(fileLines);
